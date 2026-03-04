@@ -121,32 +121,45 @@ const campainSiFlow = addKeyword(['si', 'sí'], { sensitive: false })
         // Solo procesar si este número fue parte de una campaña
         if (!campainData) return
 
+        // Inicializar acumulador de respuestas
+        campainData.responses = []
+
         await flowDynamic('Gracias por su respuesta ✅\n\n📍 ¿Podrías indicarnos la *ubicación y fecha del equipo*?')
     })
-    .addAnswer(null, { capture: true }, async (ctx, { flowDynamic }) => {
+    .addAnswer(null, { capture: true, idle: 35000 }, async (ctx, { flowDynamic, fallBack }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
 
         if (!campainData) return
 
-        const ubicacionFecha = ctx.body
+        // Si se agotó el tiempo de espera (35s sin mensajes), finalizar
+        if (ctx?.idleFallBack) {
+            const todasLasRespuestas = campainData.responses.join('\n')
 
-        // Registrar respuesta SI con la ubicación/fecha en Google Sheets
-        await registrarEnSheets({
-            type: 'RESPUESTA_SI',
-            numero: campainData.numero,
-            cliente: campainData.cliente,
-            idCliente: campainData.idCliente,
-            modelo: campainData.modelo,
-            serie: campainData.serie,
-            rrvv: campainData.rrvv,
-            respuestaPregunta: ubicacionFecha
-        })
+            // Registrar respuesta SI con todas las respuestas acumuladas
+            await registrarEnSheets({
+                type: 'RESPUESTA_SI',
+                numero: campainData.numero,
+                cliente: campainData.cliente,
+                idCliente: campainData.idCliente,
+                modelo: campainData.modelo,
+                serie: campainData.serie,
+                rrvv: campainData.rrvv,
+                respuestaPregunta: todasLasRespuestas
+            })
 
-        await flowDynamic('¡Gracias! Su información ha sido registrada correctamente.')
+            await flowDynamic('¡Gracias! Su información ha sido registrada correctamente. 👋')
 
-        // Limpiar datos de campaña
-        delete campainDataByNumber[numberClean]
+            // Limpiar datos de campaña
+            delete campainDataByNumber[numberClean]
+            return
+        }
+
+        // Acumular el mensaje del cliente
+        campainData.responses.push(ctx.body)
+
+        // Volver a esperar más mensajes (el idle timer se reinicia)
+        return fallBack()
     })
 
 // Flow para respuesta NO
@@ -158,6 +171,9 @@ const campainNoFlow = addKeyword(['no'], { sensitive: false })
         // Solo procesar si este número fue parte de una campaña
         if (!campainData) return
 
+        // Inicializar acumulador de respuestas
+        campainData.responses = []
+
         await flowDynamic([
             'Gracias por su respuesta ❌',
             '',
@@ -166,37 +182,49 @@ const campainNoFlow = addKeyword(['no'], { sensitive: false })
             '2️⃣ No, gracias'
         ].join('\n'))
     })
-    .addAnswer(null, { capture: true }, async (ctx, { flowDynamic }) => {
+    .addAnswer(null, { capture: true, idle: 35000 }, async (ctx, { flowDynamic, fallBack }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
 
         if (!campainData) return
 
-        const opcion = ctx.body.trim()
-        let opcionTexto = opcion
+        // Si se agotó el tiempo de espera (35s sin mensajes), finalizar
+        if (ctx?.idleFallBack) {
+            const todasLasRespuestas = campainData.responses.join('\n').toLowerCase()
+            let opcionTexto = todasLasRespuestas
 
-        if (opcion === '1' || opcion.toLowerCase().includes('sí') || opcion.toLowerCase().includes('si')) {
-            opcionTexto = 'Sí, desea ser contactado'
-            await flowDynamic('Entendido. Un asesor se comunicará con usted pronto. 📞')
-        } else {
-            opcionTexto = 'No desea ser contactado'
-            await flowDynamic('Entendido. ¡Gracias por su tiempo! 👋')
+            // Analizar todas las respuestas acumuladas para determinar la intención
+            if (todasLasRespuestas.includes('1') || todasLasRespuestas.includes('sí') || todasLasRespuestas.includes('si')) {
+                opcionTexto = 'Sí, desea ser contactado'
+                await flowDynamic('Entendido. Un asesor se comunicará con usted pronto. 📞')
+            } else {
+                opcionTexto = 'No desea ser contactado'
+                await flowDynamic('Entendido. ¡Gracias por su tiempo! 👋')
+            }
+
+            // Registrar respuesta NO con la opción y todas las respuestas en Google Sheets
+            await registrarEnSheets({
+                type: 'RESPUESTA_NO',
+                numero: campainData.numero,
+                cliente: campainData.cliente,
+                idCliente: campainData.idCliente,
+                modelo: campainData.modelo,
+                serie: campainData.serie,
+                rrvv: campainData.rrvv,
+                opcionContacto: opcionTexto,
+                respuestaCompleta: campainData.responses.join('\n')
+            })
+
+            // Limpiar datos de campaña
+            delete campainDataByNumber[numberClean]
+            return
         }
 
-        // Registrar respuesta NO con la opción en Google Sheets
-        await registrarEnSheets({
-            type: 'RESPUESTA_NO',
-            numero: campainData.numero,
-            cliente: campainData.cliente,
-            idCliente: campainData.idCliente,
-            modelo: campainData.modelo,
-            serie: campainData.serie,
-            rrvv: campainData.rrvv,
-            opcionContacto: opcionTexto
-        })
+        // Acumular el mensaje del cliente
+        campainData.responses.push(ctx.body)
 
-        // Limpiar datos de campaña
-        delete campainDataByNumber[numberClean]
+        // Volver a esperar más mensajes (el idle timer se reinicia)
+        return fallBack()
     })
 
 // --- MAIN ---
