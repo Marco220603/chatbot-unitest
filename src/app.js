@@ -2,6 +2,7 @@ import { join } from 'path'
 import { createBot, createProvider, createFlow, addKeyword, EVENTS } from '@builderbot/bot'
 import { MemoryDB as Database } from '@builderbot/bot'
 import { BaileysProvider as Provider } from '@builderbot/provider-baileys'
+import { utils } from '@builderbot/bot'
 
 const PORT = process.env.PORT ?? 3008
 
@@ -210,7 +211,7 @@ const campainNoFlow = addKeyword(EVENTS.ACTION)
 
 // Flow principal: punto de entrada vía bot.dispatch('CAMPAIN_RESPONSE')
 // Envía la pregunta de inspección, captura si/no y redirige al flow correspondiente
-const campainResponseFlow = addKeyword('CAMPAIN_RESPONSE')
+const campainResponseFlow = addKeyword(utils.setEvent('CAMPAIN_RESPONSE'))
     .addAction(async (ctx, { flowDynamic }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
