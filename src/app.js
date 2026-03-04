@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { createBot, createProvider, createFlow, addKeyword } from '@builderbot/bot'
+import { createBot, createProvider, createFlow, addKeyword, EVENTS } from '@builderbot/bot'
 import { MemoryDB as Database } from '@builderbot/bot'
 import { BaileysProvider as Provider } from '@builderbot/provider-baileys'
 
@@ -52,20 +52,11 @@ async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain,
             return { status: 'sin_whatsapp', message: `El número ${Numero} no tiene WhatsApp` }
         }
 
-        // 2. El número SÍ tiene WhatsApp, enviar mensaje
+        // 2. El número SÍ tiene WhatsApp, enviar mensaje de campaña
         await bot.sendMessage(Numero, Mensaje, mediaOptions)
         console.log(`[CAMPAIN] Mensaje enviado a ${Numero}`)
 
-        // 3. Enviar pregunta de inspección
-        await bot.sendMessage(Numero, [
-            '¿Desea programar la inspección?',
-            'Responda por favor:',
-            '✅ *Sí*',
-            '❌ *No*'
-        ].join('\n'), {})
-        console.log(`[CAMPAIN] Pregunta de inspección enviada a ${Numero}`)
-
-        // 4. Guardar datos de campaña para rastrear respuesta SI/NO
+        // 3. Guardar datos de campaña ANTES de dispatch
         campainDataByNumber[numberClean] = {
             cliente: Cliente,
             idCliente: ID_Cliente,
@@ -90,6 +81,10 @@ async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain,
             detalle: detalleCampain
         })
 
+        // 5. Dispatch al flujo de respuesta de campaña (envía la pregunta y espera si/no)
+        await bot.dispatch('CAMPAIN_RESPONSE', { from: Numero })
+        console.log(`[CAMPAIN] Dispatch CAMPAIN_RESPONSE a ${Numero}`)
+
         return { status: 'enviado', message: `Mensaje enviado a ${Numero}` }
 
     } catch (error) {
@@ -112,13 +107,13 @@ async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain,
     }
 }
 
-// Flow para respuesta SÍ
-const campainSiFlow = addKeyword(['si', 'sí'], { sensitive: false })
+// ========== FLOWS DE CAMPAÑA (por dispatch + gotoFlow) ==========
+
+// Flow hijo: respuesta SÍ → pide ubicación/fecha y acumula mensajes
+const campainSiFlow = addKeyword(EVENTS.ACTION)
     .addAction(async (ctx, { flowDynamic }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
-
-        // Solo procesar si este número fue parte de una campaña
         if (!campainData) return
 
         // Inicializar acumulador de respuestas
@@ -129,14 +124,12 @@ const campainSiFlow = addKeyword(['si', 'sí'], { sensitive: false })
     .addAnswer(null, { capture: true, idle: 35000 }, async (ctx, { flowDynamic, fallBack }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
-
         if (!campainData) return
 
-        // Si se agotó el tiempo de espera (35s sin mensajes), finalizar
+        // Idle expiró (35s sin mensajes) → finalizar y registrar
         if (ctx?.idleFallBack) {
             const todasLasRespuestas = campainData.responses.join('\n')
 
-            // Registrar respuesta SI con todas las respuestas acumuladas
             await registrarEnSheets({
                 type: 'RESPUESTA_SI',
                 numero: campainData.numero,
@@ -149,26 +142,20 @@ const campainSiFlow = addKeyword(['si', 'sí'], { sensitive: false })
             })
 
             await flowDynamic('¡Gracias! Su información ha sido registrada correctamente. 👋')
-
-            // Limpiar datos de campaña
             delete campainDataByNumber[numberClean]
             return
         }
 
-        // Acumular el mensaje del cliente
+        // Acumular mensaje y seguir esperando
         campainData.responses.push(ctx.body)
-
-        // Volver a esperar más mensajes (el idle timer se reinicia)
         return fallBack()
     })
 
-// Flow para respuesta NO
-const campainNoFlow = addKeyword(['no'], { sensitive: false })
+// Flow hijo: respuesta NO → pregunta si desea asesor y acumula mensajes
+const campainNoFlow = addKeyword(EVENTS.ACTION)
     .addAction(async (ctx, { flowDynamic }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
-
-        // Solo procesar si este número fue parte de una campaña
         if (!campainData) return
 
         // Inicializar acumulador de respuestas
@@ -185,15 +172,13 @@ const campainNoFlow = addKeyword(['no'], { sensitive: false })
     .addAnswer(null, { capture: true, idle: 35000 }, async (ctx, { flowDynamic, fallBack }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
-
         if (!campainData) return
 
-        // Si se agotó el tiempo de espera (35s sin mensajes), finalizar
+        // Idle expiró (35s sin mensajes) → finalizar y registrar
         if (ctx?.idleFallBack) {
             const todasLasRespuestas = campainData.responses.join('\n').toLowerCase()
             let opcionTexto = todasLasRespuestas
 
-            // Analizar todas las respuestas acumuladas para determinar la intención
             if (todasLasRespuestas.includes('1') || todasLasRespuestas.includes('sí') || todasLasRespuestas.includes('si')) {
                 opcionTexto = 'Sí, desea ser contactado'
                 await flowDynamic('Entendido. Un asesor se comunicará con usted pronto. 📞')
@@ -202,7 +187,6 @@ const campainNoFlow = addKeyword(['no'], { sensitive: false })
                 await flowDynamic('Entendido. ¡Gracias por su tiempo! 👋')
             }
 
-            // Registrar respuesta NO con la opción y todas las respuestas en Google Sheets
             await registrarEnSheets({
                 type: 'RESPUESTA_NO',
                 numero: campainData.numero,
@@ -215,22 +199,54 @@ const campainNoFlow = addKeyword(['no'], { sensitive: false })
                 respuestaCompleta: campainData.responses.join('\n')
             })
 
-            // Limpiar datos de campaña
             delete campainDataByNumber[numberClean]
             return
         }
 
-        // Acumular el mensaje del cliente
+        // Acumular mensaje y seguir esperando
         campainData.responses.push(ctx.body)
+        return fallBack()
+    })
 
-        // Volver a esperar más mensajes (el idle timer se reinicia)
+// Flow principal: punto de entrada vía bot.dispatch('CAMPAIN_RESPONSE')
+// Envía la pregunta de inspección, captura si/no y redirige al flow correspondiente
+const campainResponseFlow = addKeyword('CAMPAIN_RESPONSE')
+    .addAction(async (ctx, { flowDynamic }) => {
+        const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
+        const campainData = campainDataByNumber[numberClean]
+        if (!campainData) return
+
+        await flowDynamic([
+            '¿Desea programar la inspección?',
+            'Responda por favor:',
+            '✅ *Sí*',
+            '❌ *No*'
+        ].join('\n'))
+    })
+    .addAnswer(null, { capture: true }, async (ctx, { gotoFlow, fallBack, flowDynamic }) => {
+        const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
+        const campainData = campainDataByNumber[numberClean]
+        if (!campainData) return
+
+        const respuesta = ctx.body.trim().toLowerCase()
+
+        if (respuesta.includes('si') || respuesta.includes('sí') || respuesta === '1') {
+            return gotoFlow(campainSiFlow)
+        }
+
+        if (respuesta.includes('no') || respuesta === '2') {
+            return gotoFlow(campainNoFlow)
+        }
+
+        // Respuesta no reconocida → pedir de nuevo
+        await flowDynamic('Por favor, responda *Sí* o *No*.')
         return fallBack()
     })
 
 // --- MAIN ---
 
 const main = async () => {
-    const adapterFlow = createFlow([campainSiFlow, campainNoFlow])
+    const adapterFlow = createFlow([campainResponseFlow, campainSiFlow, campainNoFlow])
 
     const adapterProvider = createProvider(Provider,
         { version: [2, 3000, 1033927531] }
