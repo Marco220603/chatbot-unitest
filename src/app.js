@@ -187,7 +187,7 @@ const campainSiFlow = addKeyword(EVENTS.ACTION)
 
             // Enviar despedida directamente por el provider
             try {
-                await providerRef.sendMessage(data.numero, '¡Gracias! Su información ha sido registrada correctamente. 👋', {})
+                await providerRef.sendMessage(data.numero, '¡Gracias! Su información ha sido registrada correctamente. Un asesor se comunicará contigo pronto. 👋', {})
                 console.log(`[CAMPAIN-SI] Despedida enviada a ${data.numero}`)
             } catch (err) {
                 console.error(`[CAMPAIN-SI] Error enviando despedida:`, err)
@@ -242,7 +242,7 @@ const campainNoFlow = addKeyword(EVENTS.ACTION)
 
             if (todasLasRespuestas.includes('1') || todasLasRespuestas.includes('sí') || todasLasRespuestas.includes('si')) {
                 opcionTexto = 'Sí, desea ser contactado'
-                mensajeDespedida = 'Entendido. Un asesor se comunicará con usted pronto. 📞'
+                mensajeDespedida = 'Entendido. Un asesor se comunicará contigo pronto. 📞'
             } else {
                 opcionTexto = 'No desea ser contactado'
                 mensajeDespedida = 'Entendido. ¡Gracias por su tiempo! 👋'
