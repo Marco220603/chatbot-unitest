@@ -68,7 +68,7 @@ async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain,
         const onWhatsAppResult = await sock.onWhatsApp(jid)
         const result = Array.isArray(onWhatsAppResult) ? onWhatsAppResult[0] : onWhatsAppResult
 
-        if (!result || !result.exists) {git
+        if (!result || !result.exists) {
             // El número NO tiene WhatsApp
             console.log(`[CAMPAIN] Número ${Numero} NO tiene WhatsApp`)
             await registrarEnSheets({
