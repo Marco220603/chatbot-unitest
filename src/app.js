@@ -1,13 +1,17 @@
-import { join } from 'path'
-import { createBot, createProvider, createFlow, addKeyword, EVENTS, utils } from '@builderbot/bot'
+import { createBot, createProvider, createFlow, addKeyword, EVENTS } from '@builderbot/bot'
 import { MemoryDB as Database } from '@builderbot/bot'
-import { BaileysProvider as Provider } from '@builderbot/provider-baileys'
+import { MetaProvider as Provider } from '@builderbot/provider-meta'
+import dotenv from "dotenv"
+dotenv.config()
 
 const PORT = process.env.PORT ?? 3008
 const IDLE_TIMEOUT = 35000 // 35 segundos de inactividad
 
 // URL del webhook de Google Apps Script para registrar envíos
 const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwksLwMI7M-RgphlPYYz9EXunhDJluNN1RBQ-nS5j71Nqf2HituNqlNvQo2XOjqe-Xf/exec'
+
+// URL pública del flyer para campañas con imagen (PL)
+const FLYER_URL = 'https://drive.google.com/uc?export=download&id=1IQBdGczI-DIBrlrIRl4RRUZq5QmJdFCK'
 
 // Referencia global al provider para enviar mensajes desde timers
 let providerRef = null
@@ -56,52 +60,67 @@ function resetIdleTimer(numberClean, onExpire) {
 //     }
 // }
 
-// Función para enviar campaña con validación de WhatsApp y registro en Sheets
-async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain, mediaOptions) {
-    const { Cliente, ID_Cliente, Modelo, Serie, RRVV, Numero, Mensaje } = datosCampain
+// Función para enviar campaña via template de Meta y registro en Sheets
+// headerImageUrl es opcional — solo para templates que tienen header de imagen
+async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain, templateName, headerImageUrl) {
+    const { Cliente, ID_Cliente, Modelo, Serie, RRVV, Numero } = datosCampain
+    const numberClean = Numero.replace('+', '').replace(/\s/g, '')
 
-    // 1. Verificar si el número tiene WhatsApp
     try {
-        const sock = adapterProvider.vendor
-        const numberClean = Numero.replace('+', '').replace(/\s/g, '')
-        const jid = `${numberClean}@s.whatsapp.net`
-        const onWhatsAppResult = await sock.onWhatsApp(jid)
-        const result = Array.isArray(onWhatsAppResult) ? onWhatsAppResult[0] : onWhatsAppResult
+        // 1. Armar componentes del template
+        const components = [
+            {
+                type: 'body',
+                parameters: [
+                    { type: 'text', text: String(Cliente) },
+                    { type: 'text', text: String(Serie) },
+                    { type: 'text', text: String(RRVV) }
+                ]
+            }
+        ]
 
-        if (!result || !result.exists) {
-            // El número NO tiene WhatsApp
-            console.log(`[CAMPAIN] Número ${Numero} NO tiene WhatsApp`)
-            await registrarEnSheets({
-                type: 'ENVIO',
-                cliente: Cliente,
-                idCliente: ID_Cliente,
-                modelo: Modelo,
-                serie: Serie,
-                rrvv: RRVV,
-                numero: Numero,
-                estadoEnvio: 'SIN_WHATSAPP',
-                detalle: `${detalleCampain} - Número sin WhatsApp`
+        // Si el template tiene header de imagen, agregarlo
+        if (headerImageUrl) {
+            components.unshift({
+                type: 'header',
+                parameters: [
+                    { type: 'image', image: { link: headerImageUrl } }
+                ]
             })
-            return { status: 'sin_whatsapp', message: `El número ${Numero} no tiene WhatsApp` }
         }
 
-        // 2. El número SÍ tiene WhatsApp, enviar mensaje de campaña
-        await bot.sendMessage(Numero, Mensaje, mediaOptions)
-        console.log(`[CAMPAIN] Mensaje enviado a ${Numero}`)
+        // 2. Enviar template de Meta
+        const templateResult = await adapterProvider.sendTemplate(numberClean, templateName, 'es_PE', components)
 
-        // 3. Guardar datos de campaña ANTES de dispatch
+        // Meta API puede retornar un Error sin lanzarlo — verificar
+        if (templateResult instanceof Error) {
+            const detail = templateResult?.response?.data?.error
+            if (detail) {
+                const err = new Error(detail.message || JSON.stringify(detail))
+                err.response = templateResult.response
+                throw err
+            }
+            throw templateResult
+        }
+        if (templateResult?.error) {
+            throw new Error(templateResult.error.message || JSON.stringify(templateResult.error))
+        }
+
+        console.log(`[CAMPAIN] Template '${templateName}' enviado a ${numberClean}`, JSON.stringify(templateResult))
+
+        // 2. Guardar datos de campaña para los flujos de respuesta
         campainDataByNumber[numberClean] = {
             cliente: Cliente,
             idCliente: ID_Cliente,
             modelo: Modelo,
             serie: Serie,
             rrvv: RRVV,
-            numero: Numero,
+            numero: numberClean,
             detalle: detalleCampain,
             fecha: new Date().toISOString()
         }
 
-        // 4. Registrar envío exitoso
+        // 3. Registrar envío exitoso en Google Sheets
         await registrarEnSheets({
             type: 'ENVIO',
             cliente: Cliente,
@@ -109,21 +128,27 @@ async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain,
             modelo: Modelo,
             serie: Serie,
             rrvv: RRVV,
-            numero: Numero,
+            numero: numberClean,
             estadoEnvio: 'ENVIADO',
             detalle: detalleCampain
         })
 
-        // 5. Dispatch al flujo de respuesta de campaña (envía la pregunta y espera si/no)
-        await bot.dispatch('CAMPAIN_RESPONSE', { from: Numero })
-        console.log(`[CAMPAIN] Dispatch CAMPAIN_RESPONSE a ${Numero}`)
-
-        return { status: 'enviado', message: `Mensaje enviado a ${Numero}` }
+        return { status: 'enviado', message: `Template enviado a ${numberClean}` }
 
     } catch (error) {
-        console.error(`[CAMPAIN] Error enviando a ${Numero}:`, error.message)
+        // Logear detalle completo del error de Meta API
+        const metaError = error?.response?.data || error?.error || error
+        console.error(`[CAMPAIN] Error enviando a ${numberClean}:`, error.message)
+        console.error(`[CAMPAIN] Detalle Meta:`, JSON.stringify(metaError, null, 2))
 
-        // Registrar error en Google Sheets
+        // Detectar si el error es por número sin WhatsApp
+        const errorMsg = String(error.message || '').toLowerCase()
+        const sinWhatsApp = errorMsg.includes('not a valid whatsapp') ||
+            errorMsg.includes('recipient') ||
+            errorMsg.includes('incapable')
+
+        const estadoEnvio = sinWhatsApp ? 'SIN_WHATSAPP' : 'ERROR'
+
         await registrarEnSheets({
             type: 'ENVIO',
             cliente: Cliente,
@@ -131,12 +156,12 @@ async function enviarCampain(bot, adapterProvider, datosCampain, detalleCampain,
             modelo: Modelo,
             serie: Serie,
             rrvv: RRVV,
-            numero: Numero,
-            estadoEnvio: 'ERROR',
-            detalle: `${detalleCampain} - Error: ${error.message}`
+            numero: numberClean,
+            estadoEnvio,
+            detalle: `${detalleCampain} - ${estadoEnvio}: ${error.message}`
         })
 
-        return { status: 'error', message: error.message }
+        return { status: sinWhatsApp ? 'sin_whatsapp' : 'error', message: error.message }
     }
 }
 
@@ -280,39 +305,23 @@ const campainNoFlow = addKeyword(EVENTS.ACTION)
         return fallBack()
     })
 
-// Flow principal: punto de entrada vía bot.dispatch('CAMPAIN_RESPONSE')
-// Envía la pregunta de inspección, captura si/no y redirige al flow correspondiente
-const campainResponseFlow = addKeyword(utils.setEvent('CAMPAIN_RESPONSE'))
-    .addAction(async (ctx, { flowDynamic }) => {
-        const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
-        const campainData = campainDataByNumber[numberClean]
-        if (!campainData) return
-
-        await flowDynamic([
-            '¿Desea programar la inspección?',
-            'Responda por favor:',
-            '✅ *Sí*',
-            '❌ *No*'
-        ].join('\n'))
-    })
-    .addAnswer(null, { capture: true }, async (ctx, { gotoFlow, fallBack, flowDynamic }) => {
+// Flow principal: captura la respuesta de los botones del template
+// Los botones del template son: "Sí, programar" / "No, luego"
+const campainResponseFlow = addKeyword(['Sí, programar', 'No, luego'])
+    .addAction(async (ctx, { gotoFlow }) => {
         const numberClean = ctx.from.replace('+', '').replace(/\s/g, '')
         const campainData = campainDataByNumber[numberClean]
         if (!campainData) return
 
         const respuesta = ctx.body.trim().toLowerCase()
 
-        if (respuesta.includes('si') || respuesta.includes('sí') || respuesta === '1') {
+        if (respuesta.includes('sí') || respuesta.includes('si') || respuesta.includes('programar')) {
             return gotoFlow(campainSiFlow)
         }
 
-        if (respuesta.includes('no') || respuesta === '2') {
+        if (respuesta.includes('no') || respuesta.includes('luego')) {
             return gotoFlow(campainNoFlow)
         }
-
-        // Respuesta no reconocida → pedir de nuevo
-        await flowDynamic('Por favor, responda *Sí* o *No*.')
-        return fallBack()
     })
 
 // --- MAIN ---
@@ -320,9 +329,12 @@ const campainResponseFlow = addKeyword(utils.setEvent('CAMPAIN_RESPONSE'))
 const main = async () => {
     const adapterFlow = createFlow([campainResponseFlow, campainSiFlow, campainNoFlow])
 
-    const adapterProvider = createProvider(Provider,
-        { version: [2, 3000, 1033927531] }
-    )
+    const adapterProvider = createProvider(Provider, {
+        jwtToken: process.env.JWT_TOKEN,
+        numberId: process.env.NUMBER_ID,
+        verifyToken: process.env.VERIFY_TOKEN,
+        version: 'v22.0',
+    })
     // Guardar referencia global al provider para enviar mensajes desde timers
     providerRef = adapterProvider
     const adapterDB = new Database()
@@ -362,16 +374,14 @@ const main = async () => {
 
     // ========== ENDPOINTS DE CAMPAÑA ==========
 
+    // Retail → template 'minor'
     adapterProvider.server.post(
         '/v1/campain/retail',
         handleCtx(async (bot, req, res) => {
             try {
                 const result = await enviarCampain(
-                    bot,
-                    adapterProvider,
-                    req.body,
-                    'Campaña Retail',
-                    {}
+                    bot, adapterProvider, req.body,
+                    'Campaña Retail', 'minor'
                 )
                 res.writeHead(200, { 'Content-Type': 'application/json' })
                 return res.end(JSON.stringify(result))
@@ -383,19 +393,15 @@ const main = async () => {
         })
     )
 
+    // PL → template 'carrileria' (nombres cruzados en Meta) — tiene header IMAGE
     adapterProvider.server.post(
         '/v1/campain/pl',
         handleCtx(async (bot, req, res) => {
             try {
-                // Flyer solo para instalación PL
-                const flyerPath = join(process.cwd(), 'assets', 'flyers', 'Flayer.jpeg')
-
                 const result = await enviarCampain(
-                    bot,
-                    adapterProvider,
-                    req.body,
-                    'Campaña PL - Con Flyer',
-                    { media: flyerPath }
+                    bot, adapterProvider, req.body,
+                    'Campaña PL', 'carrileria',
+                    FLYER_URL
                 )
                 res.writeHead(200, { 'Content-Type': 'application/json' })
                 return res.end(JSON.stringify(result))
@@ -407,16 +413,14 @@ const main = async () => {
         })
     )
 
+    // Carrilería → template 'pl' (nombres cruzados en Meta)
     adapterProvider.server.post(
         '/v1/campain/carrileria',
         handleCtx(async (bot, req, res) => {
             try {
                 const result = await enviarCampain(
-                    bot,
-                    adapterProvider,
-                    req.body,
-                    'Campaña Carrilería',
-                    {}
+                    bot, adapterProvider, req.body,
+                    'Campaña Carrilería', 'pl'
                 )
                 res.writeHead(200, { 'Content-Type': 'application/json' })
                 return res.end(JSON.stringify(result))
@@ -428,19 +432,14 @@ const main = async () => {
         })
     )
 
+    // Test → template 'pl' (sin header imagen)
     adapterProvider.server.post(
         '/v1/campain/test',
         handleCtx(async (bot, req, res) => {
             try {
-                // Flyer solo para instalación PL
-                const flyerPath = join(process.cwd(), 'assets', 'flyers', 'Flayer.jpeg')
-
                 const result = await enviarCampain(
-                    bot,
-                    adapterProvider,
-                    req.body,
-                    'Test',
-                    { media: flyerPath }
+                    bot, adapterProvider, req.body,
+                    'Test', 'pl'
                 )
                 res.writeHead(200, { 'Content-Type': 'application/json' })
                 return res.end(JSON.stringify(result))
