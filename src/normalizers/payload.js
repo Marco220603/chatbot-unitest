@@ -2,19 +2,40 @@ import { RUC_EMPRESA, TIPO_CAMBIO_USD_PEN } from '../config/env.js'
 import { toNullableText } from '../utils/text.js'
 import { round2 } from '../utils/number.js'
 
+/**
+ * Nomenclatura según fórmula Excel:
+ * =SI(tipo="B", CONCATENAR(RUC_EMPRESA, "-", codigo), CONCATENAR(ruc_proveedor, "-", codigo))
+ *
+ * Boleta         → RUC_EMPRESA-codigo
+ * Factura / RH   → ruc_proveedor-codigo
+ */
 export const buildNomenclatura = ({ analysis }) => {
     const tipoGasto = analysis?.tipoGasto
     const codigo = toNullableText(analysis?.codigoMovimiento)
-    const rucDocumento = toNullableText(analysis?.ruc)
+    const rucProveedor = toNullableText(analysis?.ruc)
 
-    let rucBase = RUC_EMPRESA
-    if (tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios') {
-        rucBase = rucDocumento ?? RUC_EMPRESA
-    }
+    // Para Factura y RH se usa el RUC del proveedor; para Boleta el de la empresa
+    const rucBase = (tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios')
+        ? (rucProveedor ?? RUC_EMPRESA)
+        : RUC_EMPRESA
 
     if (!rucBase || !codigo) return null
 
-    return `${rucBase} - ${codigo}`
+    return `${rucBase}-${codigo}`
+}
+
+/**
+ * RUC que va al payload, misma lógica que nomenclatura:
+ * Boleta → RUC_EMPRESA,  Factura/RH → ruc_proveedor
+ */
+export const resolveRucPayload = ({ analysis }) => {
+    const tipoGasto = analysis?.tipoGasto
+    const rucProveedor = toNullableText(analysis?.ruc)
+
+    if (tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios') {
+        return rucProveedor ?? RUC_EMPRESA
+    }
+    return RUC_EMPRESA
 }
 
 export const mapTipoPayload = (tipoGasto) => {
@@ -68,7 +89,7 @@ export const buildAppScriptPayload = ({ analysis, manual, attachment }) => {
         subconcepto: manual?.subconcepto ?? null,
         provincia: manual?.provincia ?? null,
         proveedor: analysis?.proveedorRazonSocial ?? null,
-        ruc: analysis?.ruc ?? null,
+        ruc: resolveRucPayload({ analysis }),
         nomenclatura: manual?.nomenclatura ?? null,
         responsable_gasto: manual?.responsable ?? null,
         responsable_pago: manual?.responsablePago ?? null,
@@ -77,5 +98,6 @@ export const buildAppScriptPayload = ({ analysis, manual, attachment }) => {
         archivo_pdf_mime_type: attachment?.mimeType ?? null,
         archivo_pdf_base64: attachment?.base64 ?? null,
         lenguaje,
+        metodo_pago: manual?.metodoPago ?? analysis?.metodoPago ?? null,
     }
 }

@@ -12,8 +12,8 @@ import { buildConceptoGroupedCatalog } from '../catalogs/subconcepto.js'
 import { buildNomenclatura, buildAppScriptPayload } from '../normalizers/payload.js'
 
 
-export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
-    .addAnswer('Iniciando con el registro de pago...')
+export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
+    .addAnswer('Iniciando con el registro de gasto...')
     .addAnswer(
         'Por favor, suba o adjunte el comprobante de pago (png, jpg, jpeg o pdf)',
         { capture: true },
@@ -106,6 +106,7 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
                 `- Proveedor / Razon Social: ${analysis.proveedorRazonSocial ?? 'No aplica / No detectado'}`,
                 `- RUC: ${analysis.ruc ?? 'No aplica / No detectado'}`,
                 `- IGV: ${analysis.igv ?? 'No aplica / No detectado'}`,
+                `- *Metodo de pago detectado*: ${analysis.metodoPago ?? 'No detectado'}`,
             ]
 
             if (Array.isArray(analysis?.warnings) && analysis.warnings.length) {
@@ -152,25 +153,63 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, condicion } })
 
+        // ── Enviar Pregunta: Método de Pago (confirmación o corrección) ──
+        const analisis = state.get('analisisComprobante') ?? {}
+        const metodoPagoDetectado = analisis.metodoPago ?? null
+
+        const metodoMsg = metodoPagoDetectado
+            ? `2) Metodo de pago detectado: *${metodoPagoDetectado}*\n\nSi es correcto escribe *ok*. Si no, escribe el metodo de pago correcto.\n_(Opciones: YAPE, PLIN, BCP, BBVA, INTERBANK, SCOTIABANK, CMR, VISA, MASTERCARD, AMERICAN EXPRESS, DINNERS, EFECTIVO, TRANSFERENCIA)_`
+            : '2) No se pudo detectar el metodo de pago.\nEscribe el metodo de pago utilizado:\n_(Opciones: YAPE, PLIN, BCP, BBVA, INTERBANK, SCOTIABANK, CMR, VISA, MASTERCARD, AMERICAN EXPRESS, DINNERS, EFECTIVO, TRANSFERENCIA)_'
+
+        await flowDynamic([{ body: metodoMsg, delay: 0 }])
+    })
+
+    // ── Captura: Método de Pago → envía Pregunta 3: Proyecto ──
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+        const METODOS_VALIDOS = new Set([
+            'YAPE', 'PLIN', 'BCP', 'BBVA', 'INTERBANK', 'SCOTIABANK',
+            'CMR', 'VISA', 'MASTERCARD', 'AMERICAN EXPRESS', 'AMEX',
+            'DINNERS', 'DINNERS CLUB', 'EFECTIVO', 'TRANSFERENCIA',
+        ])
+
+        const input = ctx.body?.trim()?.toUpperCase() ?? ''
+        const analisis = state.get('analisisComprobante') ?? {}
+        let metodoPago = null
+
+        if (['OK', 'SI', 'SÍ', 'CONFIRMO', 'CORRECTO'].includes(input)) {
+            // Usuario confirmó el valor detectado por la IA
+            metodoPago = analisis.metodoPago ?? null
+            if (!metodoPago) {
+                return fallBack('No se habia detectado un metodo de pago. Escribe el metodo de pago utilizado:\n_(YAPE, PLIN, BCP, BBVA, INTERBANK, SCOTIABANK, CMR, VISA, MASTERCARD, AMERICAN EXPRESS, DINNERS, EFECTIVO, TRANSFERENCIA)_')
+            }
+        } else if (METODOS_VALIDOS.has(input)) {
+            metodoPago = input === 'AMEX' ? 'AMERICAN EXPRESS' : input === 'DINNERS CLUB' ? 'DINNERS' : input
+        } else {
+            return fallBack('Metodo de pago no valido. Escribe uno de los siguientes:\n*YAPE, PLIN, BCP, BBVA, INTERBANK, SCOTIABANK, CMR, VISA, MASTERCARD, AMERICAN EXPRESS, DINNERS, EFECTIVO, TRANSFERENCIA*')
+        }
+
+        const pagoManual = state.get('pagoManual') ?? {}
+        await state.update({ pagoManual: { ...pagoManual, metodoPago } })
+
         // ── Enviar Pregunta 3: Proyecto ──
         const catalogsPago = state.get('catalogsPago') ?? {}
         const proyectos = catalogsPago.proyectos ?? []
 
         const headerProyecto = [
-            '2) *rubro* = Maquinarias (valor por defecto)',
-            '4) *Distribucion_Maquinaria* = 100% (valor por defecto)',
+            '3) *rubro* = Maquinarias (valor por defecto)',
+            '5) *Distribucion_Maquinaria* = 100% (valor por defecto)',
             '',
-            '3) Selecciona el *Proyecto*. Digita el *numero* correspondiente:',
+            '4) Selecciona el *Proyecto*. Digita el *numero* correspondiente:',
         ].join('\n')
 
         if (proyectos.length) {
             await sendNumberedListChunked(proyectos, flowDynamic, { header: headerProyecto })
         } else {
-            await flowDynamic([{ body: headerProyecto.replace(/3\) Selecciona.*/, '3) No hay lista de proyectos disponible. Escribe el proyecto manualmente.'), delay: 0 }])
+            await flowDynamic([{ body: headerProyecto.replace(/4\) Selecciona.*/, '4) No hay lista de proyectos disponible. Escribe el proyecto manualmente.'), delay: 0 }])
         }
     })
 
-    // ── Captura 3: Proyecto → envía Pregunta 5: Usuarios ──
+    // ── Captura 4: Proyecto → envía Pregunta 6: Usuarios ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const catalogsPago = state.get('catalogsPago') ?? {}
         const proyectos = catalogsPago.proyectos ?? []
@@ -191,17 +230,17 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, proyecto } })
 
-        // ── Enviar Pregunta 5: Usuarios ──
+        // ── Enviar Pregunta 6: Usuarios ──
         const usuarios = catalogsPago.usuarios ?? []
 
         if (usuarios.length) {
-            await sendNumberedListChunked(usuarios, flowDynamic, { header: '5) Selecciona el valor para *Usuarios*. Digita el *numero* correspondiente:' })
+            await sendNumberedListChunked(usuarios, flowDynamic, { header: '6) Selecciona el valor para *Usuarios*. Digita el *numero* correspondiente:' })
         } else {
-            await flowDynamic([{ body: '5) No hay lista de usuarios disponible. Escribe el usuario manualmente.', delay: 0 }])
+            await flowDynamic([{ body: '6) No hay lista de usuarios disponible. Escribe el usuario manualmente.', delay: 0 }])
         }
     })
 
-    // ── Captura 5: Usuarios → envía Pregunta 6: Provincia ──
+    // ── Captura 6: Usuarios → envía Pregunta 7: Provincia ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const catalogsPago = state.get('catalogsPago') ?? {}
         const usuarios = catalogsPago.usuarios ?? []
@@ -222,17 +261,17 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, usuarios: usuario } })
 
-        // ── Enviar Pregunta 6: Provincia ──
+        // ── Enviar Pregunta 7: Provincia ──
         const provincias = catalogsPago.provincias ?? []
 
         if (provincias.length) {
-            await sendNumberedListChunked(provincias, flowDynamic, { header: '6) Selecciona la *Provincia* (sucursal). Digita el *numero* correspondiente:' })
+            await sendNumberedListChunked(provincias, flowDynamic, { header: '7) Selecciona la *Provincia* (sucursal). Digita el *numero* correspondiente:' })
         } else {
-            await flowDynamic([{ body: '6) No hay lista de provincias disponible. Escribe la provincia manualmente.', delay: 0 }])
+            await flowDynamic([{ body: '7) No hay lista de provincias disponible. Escribe la provincia manualmente.', delay: 0 }])
         }
     })
 
-    // ── Captura 6: Provincia → envía Pregunta 7A: Concepto ──
+    // ── Captura 7: Provincia → envía Pregunta 8A: Concepto ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const catalogsPago = state.get('catalogsPago') ?? {}
         const provincias = catalogsPago.provincias ?? []
@@ -253,18 +292,18 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, provincia } })
 
-        // ── Enviar Pregunta 7A: Concepto ──
+        // ── Enviar Pregunta 8A: Concepto ──
         const conceptoGrouped = catalogsPago.conceptoGrouped ?? {}
         const conceptos = conceptoGrouped.conceptos ?? []
 
         if (conceptos.length) {
-            await sendNumberedListChunked(conceptos, flowDynamic, { header: '7) Primero, selecciona el *Concepto*. Digita el *numero* correspondiente:' })
+            await sendNumberedListChunked(conceptos, flowDynamic, { header: '8) Primero, selecciona el *Concepto*. Digita el *numero* correspondiente:' })
         } else {
-            await flowDynamic([{ body: '7) No hay lista de conceptos disponible. Escribe el concepto manualmente.', delay: 0 }])
+            await flowDynamic([{ body: '8) No hay lista de conceptos disponible. Escribe el concepto manualmente.', delay: 0 }])
         }
     })
 
-    // ── Captura 7A: Concepto → envía Pregunta 7B: Subconcepto ──
+    // ── Captura 8A: Concepto → envía Pregunta 8B: Subconcepto ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const catalogsPago = state.get('catalogsPago') ?? {}
         const conceptoGrouped = catalogsPago.conceptoGrouped ?? {}
@@ -286,7 +325,7 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, concepto } })
 
-        // ── Enviar Pregunta 7B: Subconcepto ──
+        // ── Enviar Pregunta 8B: Subconcepto ──
         const subconceptos = conceptoGrouped.byConcepto?.[concepto] ?? []
         await state.update({ subconceptosFiltrados: subconceptos })
 
@@ -297,7 +336,7 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         }
     })
 
-    // ── Captura 7B: Subconcepto → envía Pregunta 8: Responsable de Compra ──
+    // ── Captura 8B: Subconcepto → envía Pregunta 9: Responsable de Compra ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const subconceptos = state.get('subconceptosFiltrados') ?? []
 
@@ -317,18 +356,18 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, subconcepto } })
 
-        // ── Enviar Pregunta 8: Responsable de Compra ──
+        // ── Enviar Pregunta 9: Responsable de Compra ──
         const catalogsPago = state.get('catalogsPago') ?? {}
         const responsables = catalogsPago.responsables ?? []
 
         if (responsables.length) {
-            await sendNumberedListChunked(responsables, flowDynamic, { header: '8) Selecciona *Responsable de Compra*. Digita el *numero* correspondiente:' })
+            await sendNumberedListChunked(responsables, flowDynamic, { header: '9) Selecciona *Responsable de Compra*. Digita el *numero* correspondiente:' })
         } else {
-            await flowDynamic([{ body: '8) No hay lista de responsables disponible. Escribe el responsable manualmente.', delay: 0 }])
+            await flowDynamic([{ body: '9) No hay lista de responsables disponible. Escribe el responsable manualmente.', delay: 0 }])
         }
     })
 
-    // ── Captura 8: Responsable de Compra → envía Pregunta 9: Responsable de Pago ──
+    // ── Captura 9: Responsable de Compra → envía Pregunta 10: Responsable de Pago ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const catalogsPago = state.get('catalogsPago') ?? {}
         const responsables = catalogsPago.responsables ?? []
@@ -349,17 +388,17 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
         const pagoManual = state.get('pagoManual') ?? {}
         await state.update({ pagoManual: { ...pagoManual, responsable } })
 
-        // ── Enviar Pregunta 9: Responsable de Pago ──
+        // ── Enviar Pregunta 10: Responsable de Pago ──
         const responsablesPago = catalogsPago.responsablesPago ?? []
 
         if (responsablesPago.length) {
-            await sendNumberedListChunked(responsablesPago, flowDynamic, { header: '9) Selecciona *Responsable de Pago*. Digita el *numero* correspondiente:' })
+            await sendNumberedListChunked(responsablesPago, flowDynamic, { header: '10) Selecciona *Responsable de Pago*. Digita el *numero* correspondiente:' })
         } else {
-            await flowDynamic([{ body: '9) No hay lista de responsables de pago disponible. Escribe el responsable de pago manualmente.', delay: 0 }])
+            await flowDynamic([{ body: '10) No hay lista de responsables de pago disponible. Escribe el responsable de pago manualmente.', delay: 0 }])
         }
     })
 
-    // ── Captura 9: Responsable de Pago → Construir y enviar payload final ──
+    // ── Captura 10: Responsable de Pago → Construir y enviar payload final ──
     .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         const catalogsPago = state.get('catalogsPago') ?? {}
         const responsablesPago = catalogsPago.responsablesPago ?? []
@@ -459,6 +498,7 @@ export const startConversationFlow = addKeyword(['pago', 'registrar pago'])
             `subconcepto: ${pagoFinal.subconcepto ?? 'No detectado'}`,
             `responsable: ${pagoFinal.responsable ?? 'No detectado'}`,
             `responsable_pago: ${pagoFinal.responsablePago ?? 'No detectado'}`,
+            `metodo_pago: ${pagoFinal.metodoPago ?? 'No detectado'}`,
             `nomenclatura: ${nomenclatura ?? 'No se pudo construir (falta RUC o codigo_movimiento)'}`,
         ].join('\n')
 

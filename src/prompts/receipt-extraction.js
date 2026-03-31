@@ -87,6 +87,17 @@ A9) Lenguaje (campo: lenguaje)
      - "ING" si es Inglés.
      - Si hay mezcla, elige el idioma de las etiquetas principales (ej: Invoice, Date = ING // Factura, Fecha = ESP).
 
+A10) Metodo de pago (campo: metodo_pago)
+     Intenta detectar el metodo/medio de pago utilizado. Busca:
+     - Logos, marcas o textos como: YAPE, PLIN, BCP, BBVA, INTERBANK, SCOTIABANK, CMR, VISA, MASTERCARD, AMERICAN EXPRESS, AMEX, DINNERS, DINNERS CLUB, EFECTIVO, CASH, TRANSFERENCIA, DEPOSITO.
+     - Patrones transaccionales: si aparece "Yape" o "Operacion Yape" → "YAPE". Si aparece "Plin" → "PLIN".
+     - Si el comprobante menciona un banco (BCP, Interbank, BBVA, Scotiabank) como procesador → usa el nombre del banco.
+     - Si detectas una tarjeta (VISA, MASTERCARD, CMR, AMEX, DINNERS) → usa el nombre de la tarjeta/red.
+     - Si aparece "EFECTIVO" o "CASH" → "EFECTIVO".
+     - Si aparece "TRANSFERENCIA", "DEPOSITO" o "WIRE" → "TRANSFERENCIA".
+     - Normaliza siempre a MAYUSCULAS.
+     - Si no puedes determinarlo con confianza: null.
+
 B) CAMPOS EXTRA
 Ademas de los campos principales, llena "metadatos" si estan disponibles:
 - numero_comprobante
@@ -109,6 +120,7 @@ Devuelve exactamente este esquema y solo JSON:
     "descripcion": "string|null",
     "moneda": "PEN|USD|null",
     "lenguaje": "ESP|ING",
+    "metodo_pago": "YAPE|PLIN|BCP|BBVA|INTERBANK|SCOTIABANK|CMR|VISA|MASTERCARD|AMERICAN EXPRESS|DINNERS|EFECTIVO|TRANSFERENCIA|null",
     "proveedor_razon_social": "string|null",
     "proveedor_ruc": "string|null",
     "igv": "number|null",
@@ -133,7 +145,8 @@ Devuelve exactamente este esquema y solo JSON:
         "lenguaje": 0.0,
         "proveedor_razon_social": 0.0,
         "proveedor_ruc": 0.0,
-        "igv": 0.0
+        "igv": 0.0,
+        "metodo_pago": 0.0
     },
     "evidencias": {
         "tipo_gasto": {"texto": "string|null", "pagina": "number|null"},
@@ -145,7 +158,8 @@ Devuelve exactamente este esquema y solo JSON:
         "lenguaje": {"texto": "string|null", "pagina": "number|null"},
         "proveedor_razon_social": {"texto": "string|null", "pagina": "number|null"},
         "proveedor_ruc": {"texto": "string|null", "pagina": "number|null"},
-        "igv": {"texto": "string|null", "pagina": "number|null"}
+        "igv": {"texto": "string|null", "pagina": "number|null"},
+        "metodo_pago": {"texto": "string|null", "pagina": "number|null"}
     },
     "warnings": ["string"]
 }
