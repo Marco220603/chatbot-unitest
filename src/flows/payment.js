@@ -1,5 +1,5 @@
 import { addKeyword } from '@builderbot/bot'
-import { JWT_TOKEN } from '../config/env.js'
+import { JWT_TOKEN, RUC_EMPRESA } from '../config/env.js'
 import { normalizeText, cleanNumber, toNullableText } from '../utils/text.js'
 import { debugAiLog } from '../utils/debug.js'
 import { downloadAttachmentAsBase64 } from '../services/attachment.js'
@@ -32,9 +32,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     .addAnswer(
         'Por favor, suba o adjunte el comprobante de pago (png, jpg, jpeg o pdf)',
         { capture: true },
-        async (ctx, { flowDynamic, fallBack, state, endFlow }) => {
+        async (ctx, { flowDynamic, fallBack, state }) => {
             if (shouldExitFlow(ctx.body)) {
-                return endFlow(FLOW_EXIT_MESSAGE)
+                return fallBack(FLOW_EXIT_MESSAGE)
             }
 
             const mimeType = normalizeAllowedAttachmentMime(ctx?.fileData?.mime_type)
@@ -94,6 +94,10 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
                 return fallBack(
                     `No se pudo detectar correctamente proveedor y/o RUC para ${tipoGasto}. Envia un archivo mas claro para continuar.`
                 )
+            }
+
+            if (tipoGasto === 'Boleta' && !RUC_EMPRESA) {
+                return fallBack('No se puede continuar: falta configurar RUC_EMPRESA para registrar boletas y construir nomenclatura.')
             }
 
             // Procesar resultado de catálogos (si falla, usar valores vacíos)
@@ -172,9 +176,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     )
 
     // ── Captura 1: Condición → envía Pregunta 3: Proyecto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const input = normalizeText(ctx.body)
@@ -203,9 +207,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura: Método de Pago → envía Pregunta 3: Proyecto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const METODOS_VALIDOS = new Set([
@@ -252,9 +256,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 4: Proyecto → envía Pregunta 6: Usuarios ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const catalogsPago = state.get('catalogsPago') ?? {}
@@ -287,9 +291,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 6: Usuarios → envía Pregunta 7: Provincia ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const catalogsPago = state.get('catalogsPago') ?? {}
@@ -322,9 +326,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 7: Provincia → envía Pregunta 8A: Concepto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const catalogsPago = state.get('catalogsPago') ?? {}
@@ -358,9 +362,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 8A: Concepto → envía Pregunta 8B: Subconcepto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const catalogsPago = state.get('catalogsPago') ?? {}
@@ -395,9 +399,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 8B: Subconcepto → envía Pregunta 9: Responsable de Compra ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const subconceptos = state.get('subconceptosFiltrados') ?? []
@@ -430,9 +434,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 9: Responsable de Compra → envía Pregunta 10: Responsable de Pago ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const catalogsPago = state.get('catalogsPago') ?? {}
@@ -465,9 +469,9 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
     })
 
     // ── Captura 10: Responsable de Pago → Construir y enviar payload final ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
         if (shouldExitFlow(ctx.body)) {
-            return endFlow(FLOW_EXIT_MESSAGE)
+            return fallBack(FLOW_EXIT_MESSAGE)
         }
 
         const catalogsPago = state.get('catalogsPago') ?? {}
@@ -555,8 +559,8 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
             `moneda: ${analisisComprobante.tipoMoneda ?? 'No detectado'}`,
             `lenguaje: ${analisisComprobante.lenguaje ?? 'No detectado'}`,
             `tipo_gasto: ${analisisComprobante.tipoGasto ?? 'No detectado'}`,
-            `proveedor_razon_social: ${analisisComprobante.proveedorRazonSocial ?? 'No detectado'}`,
-            `proveedor_ruc: ${analisisComprobante.ruc ?? 'No detectado'}`,
+            `proveedor_razon_social: ${payloadAppScript.proveedor ?? 'No detectado'}`,
+            `proveedor_ruc: ${payloadAppScript.ruc ?? 'No detectado'}`,
             `igv: ${analisisComprobante.igv ?? 'No detectado'}`,
             `condicion: ${pagoFinal.condicion ?? 'No detectado'}`,
             `rubro: ${pagoFinal.rubro ?? 'No detectado'}`,
@@ -569,7 +573,7 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 're
             `responsable: ${pagoFinal.responsable ?? 'No detectado'}`,
             `responsable_pago: ${pagoFinal.responsablePago ?? 'No detectado'}`,
             `metodo_pago: ${pagoFinal.metodoPago ?? 'No detectado'}`,
-            `nomenclatura: ${nomenclatura ?? 'No se pudo construir (falta RUC o codigo_movimiento)'}`,
+            `nomenclatura: ${payloadAppScript.nomenclatura ?? 'No se pudo construir (falta RUC o codigo_movimiento)'}`,
         ].join('\n')
 
         await flowDynamic([{ body: resumenFinal, delay: 0 }])
