@@ -80,14 +80,13 @@ export const buildAppScriptPayload = ({ analysis, manual, attachment }) => {
             : montoFinal
 
     const lenguaje = analysis?.lenguaje ?? 'ESP'
-    const isRh = analysis?.tipoGasto === 'Recibo por Honorarios'
     let archivoPdfNombre = attachment?.nombre ?? null
 
-    if (lenguaje === 'ING' && archivoPdfNombre && !isRh) {
+    if (lenguaje === 'ING' && archivoPdfNombre) {
         archivoPdfNombre = `INVOICE ${archivoPdfNombre}`
     }
 
-    if (isRh && manual?.nomenclatura) {
+    if (manual?.nomenclatura) {
         const extensionMatch = (attachment?.nombre ?? '').match(/\.[a-z0-9]+$/i)
         const extension = extensionMatch ? extensionMatch[0] : ''
         archivoPdfNombre = `${manual.nomenclatura}${extension}`
