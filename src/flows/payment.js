@@ -11,16 +11,35 @@ import { sendNumberedListChunked, resolveNumberedSelection } from '../catalogs/s
 import { buildConceptoGroupedCatalog } from '../catalogs/subconcepto.js'
 import { buildNomenclatura, buildAppScriptPayload } from '../normalizers/payload.js'
 
+const FLOW_EXIT_MESSAGE = 'Flujo cancelado. Para iniciar nuevamente escribe: registrar pago.'
+const FLOW_EXIT_COMMANDS = new Set(['cancelar', 'salir', 'terminar', 'stop', 'cancelar flujo', 'terminar flujo'])
 
-export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
+const shouldExitFlow = (text) => {
+    const normalized = normalizeText(text)
+    if (!normalized) return false
+    if (FLOW_EXIT_COMMANDS.has(normalized)) return true
+    return normalized.startsWith('cancelar ') || normalized.startsWith('terminar ')
+}
+
+const normalizeAllowedAttachmentMime = (mimeType = '') => {
+    const value = String(mimeType).toLowerCase().trim()
+    if (value === 'image/jpg') return 'image/jpeg'
+    return value
+}
+
+export const startConversationFlow = addKeyword(['gasto', 'registrar gasto', 'registrar pago'])
     .addAnswer('Iniciando con el registro de gasto...')
     .addAnswer(
         'Por favor, suba o adjunte el comprobante de pago (png, jpg, jpeg o pdf)',
         { capture: true },
-        async (ctx, { flowDynamic, fallBack, state }) => {
-            const mimeType = ctx?.fileData?.mime_type?.toLowerCase() ?? ''
+        async (ctx, { flowDynamic, fallBack, state, endFlow }) => {
+            if (shouldExitFlow(ctx.body)) {
+                return endFlow(FLOW_EXIT_MESSAGE)
+            }
+
+            const mimeType = normalizeAllowedAttachmentMime(ctx?.fileData?.mime_type)
             const mediaUrl = ctx?.url
-            const allowedMimeTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'])
+            const allowedMimeTypes = new Set(['image/png', 'image/jpeg', 'application/pdf'])
 
             if (!mediaUrl || !allowedMimeTypes.has(mimeType)) {
                 return fallBack('Archivo no valido. Envie unicamente un comprobante en formato PNG, JPG/JPEG o PDF.')
@@ -61,6 +80,21 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
             }
 
             const analysis = geminiResult.value
+
+            if (!analysis?.fechaPago) {
+                return fallBack(
+                    'No se pudo detectar la fecha de emision/pago del comprobante. Envia un archivo mas claro o con la fecha visible para continuar.'
+                )
+            }
+
+            const tipoGasto = analysis?.tipoGasto
+            const requiereProveedorYRuc = tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios'
+
+            if (requiereProveedorYRuc && (!analysis?.proveedorRazonSocial || !analysis?.ruc)) {
+                return fallBack(
+                    `No se pudo detectar correctamente proveedor y/o RUC para ${tipoGasto}. Envia un archivo mas claro para continuar.`
+                )
+            }
 
             // Procesar resultado de catálogos (si falla, usar valores vacíos)
             const catalogs = catalogsResult.status === 'fulfilled'
@@ -138,7 +172,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     )
 
     // ── Captura 1: Condición → envía Pregunta 3: Proyecto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const input = normalizeText(ctx.body)
         let condicion = null
 
@@ -165,7 +203,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura: Método de Pago → envía Pregunta 3: Proyecto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const METODOS_VALIDOS = new Set([
             'YAPE', 'PLIN', 'BCP', 'BBVA', 'INTERBANK', 'SCOTIABANK',
             'CMR', 'VISA', 'MASTERCARD', 'AMERICAN EXPRESS', 'AMEX',
@@ -210,7 +252,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 4: Proyecto → envía Pregunta 6: Usuarios ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const catalogsPago = state.get('catalogsPago') ?? {}
         const proyectos = catalogsPago.proyectos ?? []
 
@@ -241,7 +287,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 6: Usuarios → envía Pregunta 7: Provincia ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const catalogsPago = state.get('catalogsPago') ?? {}
         const usuarios = catalogsPago.usuarios ?? []
 
@@ -272,7 +322,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 7: Provincia → envía Pregunta 8A: Concepto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const catalogsPago = state.get('catalogsPago') ?? {}
         const provincias = catalogsPago.provincias ?? []
 
@@ -304,7 +358,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 8A: Concepto → envía Pregunta 8B: Subconcepto ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const catalogsPago = state.get('catalogsPago') ?? {}
         const conceptoGrouped = catalogsPago.conceptoGrouped ?? {}
         const conceptos = conceptoGrouped.conceptos ?? []
@@ -337,7 +395,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 8B: Subconcepto → envía Pregunta 9: Responsable de Compra ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const subconceptos = state.get('subconceptosFiltrados') ?? []
 
         let subconcepto = resolveNumberedSelection(ctx.body, subconceptos)
@@ -368,7 +430,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 9: Responsable de Compra → envía Pregunta 10: Responsable de Pago ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const catalogsPago = state.get('catalogsPago') ?? {}
         const responsables = catalogsPago.responsables ?? []
 
@@ -399,7 +465,11 @@ export const startConversationFlow = addKeyword(['gasto', 'registrar gasto'])
     })
 
     // ── Captura 10: Responsable de Pago → Construir y enviar payload final ──
-    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic }) => {
+    .addAnswer(null, { capture: true }, async (ctx, { state, fallBack, flowDynamic, endFlow }) => {
+        if (shouldExitFlow(ctx.body)) {
+            return endFlow(FLOW_EXIT_MESSAGE)
+        }
+
         const catalogsPago = state.get('catalogsPago') ?? {}
         const responsablesPago = catalogsPago.responsablesPago ?? []
 

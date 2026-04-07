@@ -1,4 +1,4 @@
-import { RUC_EMPRESA, TIPO_CAMBIO_USD_PEN } from '../config/env.js'
+import { RUC_EMPRESA, RAZON_SOCIAL_EMPRESA, TIPO_CAMBIO_USD_PEN } from '../config/env.js'
 import { toNullableText } from '../utils/text.js'
 import { round2 } from '../utils/number.js'
 
@@ -7,15 +7,23 @@ import { round2 } from '../utils/number.js'
  * =SI(tipo="B", CONCATENAR(RUC_EMPRESA, "-", codigo), CONCATENAR(ruc_proveedor, "-", codigo))
  *
  * Boleta         → RUC_EMPRESA-codigo
- * Factura / RH   → ruc_proveedor-codigo
+ * Factura        → ruc_proveedor-codigo
+ * RH             → numero_rh-codigo_pago
  */
 export const buildNomenclatura = ({ analysis }) => {
     const tipoGasto = analysis?.tipoGasto
     const codigo = toNullableText(analysis?.codigoMovimiento)
+    const numeroRh = toNullableText(analysis?.metadatos?.numero_comprobante)
     const rucProveedor = toNullableText(analysis?.ruc)
 
-    // Para Factura y RH se usa el RUC del proveedor; para Boleta el de la empresa
-    const rucBase = (tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios')
+    if (tipoGasto === 'Recibo por Honorarios') {
+        const partesRh = [numeroRh, codigo].filter(Boolean)
+        if (!partesRh.length) return null
+        return partesRh.join('_')
+    }
+
+    // Para Factura se usa el RUC del proveedor; para Boleta el de la empresa
+    const rucBase = (tipoGasto === 'Factura')
         ? (rucProveedor ?? RUC_EMPRESA)
         : RUC_EMPRESA
 
@@ -33,9 +41,20 @@ export const resolveRucPayload = ({ analysis }) => {
     const rucProveedor = toNullableText(analysis?.ruc)
 
     if (tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios') {
-        return rucProveedor ?? RUC_EMPRESA
+        return rucProveedor ?? null
     }
     return RUC_EMPRESA
+}
+
+export const resolveProveedorPayload = ({ analysis }) => {
+    const tipoGasto = analysis?.tipoGasto
+    const proveedorArchivo = toNullableText(analysis?.proveedorRazonSocial)
+
+    if (tipoGasto === 'Factura' || tipoGasto === 'Recibo por Honorarios') {
+        return proveedorArchivo ?? null
+    }
+
+    return RAZON_SOCIAL_EMPRESA
 }
 
 export const mapTipoPayload = (tipoGasto) => {
@@ -61,10 +80,17 @@ export const buildAppScriptPayload = ({ analysis, manual, attachment }) => {
             : montoFinal
 
     const lenguaje = analysis?.lenguaje ?? 'ESP'
+    const isRh = analysis?.tipoGasto === 'Recibo por Honorarios'
     let archivoPdfNombre = attachment?.nombre ?? null
 
-    if (lenguaje === 'ING' && archivoPdfNombre) {
+    if (lenguaje === 'ING' && archivoPdfNombre && !isRh) {
         archivoPdfNombre = `INVOICE ${archivoPdfNombre}`
+    }
+
+    if (isRh && manual?.nomenclatura) {
+        const extensionMatch = (attachment?.nombre ?? '').match(/\.[a-z0-9]+$/i)
+        const extension = extensionMatch ? extensionMatch[0] : ''
+        archivoPdfNombre = `${manual.nomenclatura}${extension}`
     }
 
     return {
@@ -88,7 +114,7 @@ export const buildAppScriptPayload = ({ analysis, manual, attachment }) => {
         'año': now.getFullYear(),
         subconcepto: manual?.subconcepto ?? null,
         provincia: manual?.provincia ?? null,
-        proveedor: analysis?.proveedorRazonSocial ?? null,
+        proveedor: resolveProveedorPayload({ analysis }),
         ruc: resolveRucPayload({ analysis }),
         nomenclatura: manual?.nomenclatura ?? null,
         responsable_gasto: manual?.responsable ?? null,
