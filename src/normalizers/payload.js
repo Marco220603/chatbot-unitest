@@ -96,7 +96,7 @@ export const buildAppScriptPayload = ({ analysis, manual, attachment }) => {
         fecha_emision: analysis?.fechaPago ?? null,
         fecha_compra: analysis?.fechaPago ?? null,
         descripcion: analysis?.descripcion ?? null,
-        usuario_gasto: manual?.responsable ?? null,
+        usuario_gasto: manual?.usuarios ?? null,
         tipo: mapTipoPayload(analysis?.tipoGasto),
         condicion: manual?.condicion ?? null,
         tipo_moneda: mapTipoMonedaPayload(tipoMoneda),

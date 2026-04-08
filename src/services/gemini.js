@@ -1,5 +1,4 @@
 import { GEMINI_APIKEY, GEMINI_MODEL } from '../config/env.js'
-import { dedupe } from '../utils/array.js'
 import { debugAiLog } from '../utils/debug.js'
 import { extractJsonFromText } from '../utils/json.js'
 import { RECEIPT_EXTRACTION_PROMPT } from '../prompts/receipt-extraction.js'
@@ -14,6 +13,10 @@ const normalizeGeminiMimeType = (mimeType = '') => {
 export const analyzeReceiptWithGemini = async ({ fileUrl, mimeType, jwtToken, prefetchedBase64 = null }) => {
     if (!GEMINI_APIKEY) {
         throw new Error('No se encontro GEMINI_APIKEY en variables de entorno.')
+    }
+
+    if (!GEMINI_MODEL) {
+        throw new Error('No se encontro GEMINI_MODEL en variables de entorno.')
     }
 
     let fileBase64 = prefetchedBase64
@@ -34,20 +37,23 @@ export const analyzeReceiptWithGemini = async ({ fileUrl, mimeType, jwtToken, pr
     }
 
     const safeMimeType = normalizeGeminiMimeType(mimeType)
-    const candidateModels = dedupe([GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-1.5-flash'])
+    const retryWindowMs = 15_000
+    const retryDelayMs = 1_000
+    const startedAt = Date.now()
 
     debugAiLog('input', {
         mimeType: safeMimeType,
         base64Length: fileBase64.length,
-        candidateModels,
+        model: GEMINI_MODEL,
+        retryWindowMs,
     })
 
     let geminiJson = null
     let lastError = null
 
-    for (const model of candidateModels) {
+    while (Date.now() - startedAt < retryWindowMs) {
         const geminiResponse = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_APIKEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_APIKEY}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -75,7 +81,7 @@ export const analyzeReceiptWithGemini = async ({ fileUrl, mimeType, jwtToken, pr
 
         if (geminiResponse.ok) {
             geminiJson = await geminiResponse.json()
-            debugAiLog('model_ok', { model })
+            debugAiLog('model_ok', { model: GEMINI_MODEL })
             break
         }
 
@@ -96,8 +102,18 @@ export const analyzeReceiptWithGemini = async ({ fileUrl, mimeType, jwtToken, pr
             if (errorBody) errorMessage = errorBody
         }
 
-        lastError = `${model}: ${errorMessage}`
-        debugAiLog('model_error', { model, errorMessage })
+        lastError = `${GEMINI_MODEL}: ${errorMessage}`
+        debugAiLog('model_error', {
+            model: GEMINI_MODEL,
+            errorMessage,
+            elapsedMs: Date.now() - startedAt,
+        })
+
+        if (Date.now() - startedAt >= retryWindowMs) {
+            break
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
     }
 
     if (!geminiJson) {
